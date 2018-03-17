@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+
+import argparse
+import os
+import re
+import sys
+import shutil
+from functools import partial
+
+version = '1.0.0'
+
+epilog='''This program comes with ABSOLUTELY NO WARRANTY.
+This is free software, and you are welcome to redistribute it
+under certain conditions; see https://www.gnu.org/licenses/gpl.html'''
+
+format_help = '''the format for naming the output files. The following variables can be used:
+%t - the type: 'normal', 'onion' or 'double'
+%c - the two letter country core for normal or onion
+     concatenation of the country codes for double
+%p - the transport protocol
+%n - server number padded to 4 digits
+%b - basename of the input file
+'''
+
+category_regex = '^(?:(?:([a-z]{2})-tor)|([a-z]{2}-[a-z]{2})|([a-z]{2}))([0-9]+)\.nordvpn\.com\.([a-z]*)\.ovpn$'
+
+parser = argparse.ArgumentParser(description='Helper tool for organizing NordVPN configuration files for Tunnelblick.')
+parser.add_argument('files', metavar='file', type=str, nargs='*',
+                    help='NordVPN configuration file for Tunnelblick')
+parser.add_argument('--format', dest='format', default='%p/%t/%c/%c%n.nordvpn.com.%p.ovpn',
+                    help=format_help)
+parser.add_argument('--output', '-o', dest='dest', default='nordvpn.tblk',
+                    help='output directory')
+
+def categorize(path):
+    basename = os.path.basename(path)
+    match = re.match(category_regex, basename)
+
+    if match == None:
+        print("Error: unable to recognize `{}'".format(path), file=sys.stderr)
+        return match
+
+    result = { 'source': path, 'basename': basename, 'protocol': match.group(5), 'n': int(match.group(4)) }
+
+    if match.group(1):
+        result['type'] = 'onion'
+        result['country'] = match.group(1)
+    elif match.group(2):
+        result['type'] = 'double'
+        result['country'] = match.group(2)
+    else:
+        result['type'] = 'normal'
+        result['country'] = match.group(3)
+
+    return result
+
+def with_target(format, config):
+    target = format \
+      .replace('%t', config['type']) \
+      .replace('%c', config['country']) \
+      .replace('%p', config['protocol']) \
+      .replace('%n', '{:04d}'.format(config['n'])) \
+      .replace('%b', config['basename'])
+
+    config['target'] = target
+    return config
+
+def copy_config(config, dest):
+    d = os.path.join(dest, config['target'])
+    os.makedirs(os.path.dirname(d), exist_ok=True)
+    shutil.copy(config['source'], d)
+
+def main(args):
+    files = args.files if len(args.files) else sys.stdin.read().strip().split(' ')
+
+    configs = map(partial(with_target, args.format), filter(None.__ne__, map(categorize, files)))
+
+    for config in configs:
+        copy_config(config, args.dest)
+
+if __name__ == "__main__":
+    main(parser.parse_args())
